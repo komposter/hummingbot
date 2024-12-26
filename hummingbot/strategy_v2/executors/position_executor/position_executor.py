@@ -364,7 +364,15 @@ class PositionExecutor(ExecutorBase):
                 await connector._update_orders_with_error_handler(
                     orders=[in_flight_order],
                     error_handler=connector._handle_update_error_for_lost_order)
-                self.logger().info("Waiting for close order to be filled")
+                # if closing order exists, but not filled, and price moved away from the order, cancel the order (it will be placed again) (only for limit orders)
+                if self._close_order.is_open and not self._close_order.is_filled and self._close_order.order.order_type.is_limit_type():
+                    side = self.close_order_side
+                    if (side == TradeType.BUY and self.get_price_for_limit_maker(side) > self._close_order.order.price) or \
+                            (side == TradeType.SELL and self.get_price_for_limit_maker(side) < self._close_order.order.price):
+                        self.logger().info(f"Price ({self.get_price_for_limit_maker(side)}) moved away from the closing order price ({self._close_order.order.price}), cancelling the order")
+                        self.renew_close_order()
+                else:
+                    self.logger().info("Waiting for close order to be filled")
             else:
                 self._failed_orders.append(self._close_order)
                 self._close_order = None
@@ -611,6 +619,16 @@ class PositionExecutor(ExecutorBase):
             order_id=self._open_order.order_id
         )
         self.logger().debug("Removing open order")
+
+    def renew_close_order(self):
+        """
+        This method is responsible for renewing the close order.
+
+        :return: None
+        """
+        self.cancel_close_order()
+        self.place_close_order_and_cancel_open_orders(close_type=self.close_type, price=self.close_price)
+        self.logger().debug("Renewing close order")
 
     def cancel_close_order(self):
         """
