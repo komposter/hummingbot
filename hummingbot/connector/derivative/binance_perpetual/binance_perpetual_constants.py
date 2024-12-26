@@ -2,7 +2,7 @@ from hummingbot.core.api_throttler.data_types import LinkedLimitWeightPair, Rate
 from hummingbot.core.data_type.in_flight_order import OrderState
 
 EXCHANGE_NAME = "binance_perpetual"
-BROKER_ID = "x-nbQe1H39"
+BROKER_ID = "x-7TB4xMXD"
 MAX_ORDER_ID_LEN = 32
 
 DOMAIN = EXCHANGE_NAME
