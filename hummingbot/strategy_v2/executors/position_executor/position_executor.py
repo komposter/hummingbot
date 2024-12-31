@@ -287,16 +287,8 @@ class PositionExecutor(ExecutorBase):
         """
         if self.config.side == TradeType.BUY:
             take_profit_price = self.entry_price * (1 + self.config.triple_barrier_config.take_profit)
-            # if self.config.triple_barrier_config.take_profit_order_type == OrderType.LIMIT_MAKER:
-            #     take_profit_price = max(take_profit_price,
-            #                             self.get_price(self.config.connector_name, self.config.trading_pair,
-            #                                            PriceType.BestAsk))
         else:
             take_profit_price = self.entry_price * (1 - self.config.triple_barrier_config.take_profit)
-            # if self.config.triple_barrier_config.take_profit_order_type == OrderType.LIMIT_MAKER:
-            #     take_profit_price = min(take_profit_price,
-            #                             self.get_price(self.config.connector_name, self.config.trading_pair,
-            #                                            PriceType.BestBid))
         if self.config.triple_barrier_config.take_profit_order_type == OrderType.LIMIT_MAKER:
             take_profit_price = self.get_price_for_limit_maker(self.close_order_side, take_profit_price)
         return take_profit_price
