@@ -43,9 +43,9 @@ class PositionExecutor(ExecutorBase):
         :param update_interval: The interval at which the PositionExecutor should be updated, defaults to 1.0.
         :param max_retries: The maximum number of retries for the PositionExecutor, defaults to 5.
         """
-        if config.triple_barrier_config.time_limit_order_type != OrderType.MARKET or \
-                config.triple_barrier_config.stop_loss_order_type != OrderType.MARKET:
-            error = "Only market orders are supported for time_limit and stop_loss"
+        # if config.triple_barrier_config.time_limit_order_type != OrderType.MARKET or config.triple_barrier_config.stop_loss_order_type != OrderType.MARKET:
+        if config.triple_barrier_config.stop_loss_order_type != OrderType.MARKET:
+            error = "Only market orders are supported for stop_loss"
             self.logger().error(error)
             raise ValueError(error)
         super().__init__(strategy=strategy, config=config, connectors=[config.connector_name],
@@ -185,14 +185,20 @@ class PositionExecutor(ExecutorBase):
         if self._open_order and self._open_order.is_done:
             return self._open_order.average_executed_price
         elif self.config.triple_barrier_config.open_order_type == OrderType.LIMIT_MAKER:
-            if self.config.side == TradeType.BUY:
-                best_bid = self.get_price(self.config.connector_name, self.config.trading_pair, PriceType.BestBid)
-                return min(self.config.entry_price, best_bid)
-            else:
-                best_ask = self.get_price(self.config.connector_name, self.config.trading_pair, PriceType.BestAsk)
-                return max(self.config.entry_price, best_ask)
+            return self.get_price_for_limit_maker(self.config.side, self.config.entry_price)
         else:
             return self.config.entry_price
+
+    def get_price_for_limit_maker(self, side: TradeType, config_price: Decimal = Decimal("NaN")) -> Decimal:
+        """
+        This method is responsible for getting the price for the limit maker order type.
+        """
+        if side == TradeType.BUY:
+            best_bid = self.get_price(self.config.connector_name, self.config.trading_pair, PriceType.BestBid)
+            return min(config_price, best_bid) if not math.isnan(config_price) else best_bid
+        else:
+            best_ask = self.get_price(self.config.connector_name, self.config.trading_pair, PriceType.BestAsk)
+            return max(config_price, best_ask) if not math.isnan(config_price) else best_ask
 
     @property
     def close_price(self) -> Decimal:
@@ -281,16 +287,18 @@ class PositionExecutor(ExecutorBase):
         """
         if self.config.side == TradeType.BUY:
             take_profit_price = self.entry_price * (1 + self.config.triple_barrier_config.take_profit)
-            if self.config.triple_barrier_config.take_profit_order_type == OrderType.LIMIT_MAKER:
-                take_profit_price = max(take_profit_price,
-                                        self.get_price(self.config.connector_name, self.config.trading_pair,
-                                                       PriceType.BestAsk))
+            # if self.config.triple_barrier_config.take_profit_order_type == OrderType.LIMIT_MAKER:
+            #     take_profit_price = max(take_profit_price,
+            #                             self.get_price(self.config.connector_name, self.config.trading_pair,
+            #                                            PriceType.BestAsk))
         else:
             take_profit_price = self.entry_price * (1 - self.config.triple_barrier_config.take_profit)
-            if self.config.triple_barrier_config.take_profit_order_type == OrderType.LIMIT_MAKER:
-                take_profit_price = min(take_profit_price,
-                                        self.get_price(self.config.connector_name, self.config.trading_pair,
-                                                       PriceType.BestBid))
+            # if self.config.triple_barrier_config.take_profit_order_type == OrderType.LIMIT_MAKER:
+            #     take_profit_price = min(take_profit_price,
+            #                             self.get_price(self.config.connector_name, self.config.trading_pair,
+            #                                            PriceType.BestBid))
+        if self.config.triple_barrier_config.take_profit_order_type == OrderType.LIMIT_MAKER:
+            take_profit_price = self.get_price_for_limit_maker(self.close_order_side, take_profit_price)
         return take_profit_price
 
     async def control_task(self):
@@ -354,7 +362,15 @@ class PositionExecutor(ExecutorBase):
                 await connector._update_orders_with_error_handler(
                     orders=[in_flight_order],
                     error_handler=connector._handle_update_error_for_lost_order)
-                self.logger().info("Waiting for close order to be filled")
+                # if closing order exists, but not filled, and price moved away from the order, cancel the order (it will be placed again) (only for limit orders)
+                if self._close_order.is_open and not self._close_order.is_filled and self._close_order.order.order_type.is_limit_type():
+                    side = self.close_order_side
+                    if (side == TradeType.BUY and self.get_price_for_limit_maker(side) > self._close_order.order.price) or \
+                            (side == TradeType.SELL and self.get_price_for_limit_maker(side) < self._close_order.order.price):
+                        self.logger().info(f"Price ({self.get_price_for_limit_maker(side)}) moved away from the closing order price ({self._close_order.order.price}), cancelling the order")
+                        self.renew_close_order()
+                else:
+                    self.logger().info("Waiting for close order to be filled")
             else:
                 self._failed_orders.append(self._close_order)
                 self._close_order = None
@@ -473,12 +489,14 @@ class PositionExecutor(ExecutorBase):
         """
         self.cancel_open_orders()
         if self.amount_to_close >= self.trading_rules.min_order_size:
+            # if self.config.triple_barrier_config.xxxxxxxx == OrderType.LIMIT_MAKER:
+            close_price = self.get_price_for_limit_maker(self.close_order_side, price)
             order_id = self.place_order(
                 connector_name=self.config.connector_name,
                 trading_pair=self.config.trading_pair,
-                order_type=OrderType.MARKET,
+                order_type=OrderType.LIMIT_MAKER,
                 amount=self.amount_to_close,
-                price=price,
+                price=close_price,
                 side=self.close_order_side,
                 position_action=PositionAction.CLOSE,
             )
@@ -599,6 +617,16 @@ class PositionExecutor(ExecutorBase):
             order_id=self._open_order.order_id
         )
         self.logger().debug("Removing open order")
+
+    def renew_close_order(self):
+        """
+        This method is responsible for renewing the close order.
+
+        :return: None
+        """
+        self.cancel_close_order()
+        self.place_close_order_and_cancel_open_orders(close_type=self.close_type, price=self.close_price)
+        self.logger().debug("Renewing close order")
 
     def cancel_close_order(self):
         """
