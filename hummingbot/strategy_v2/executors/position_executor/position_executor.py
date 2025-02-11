@@ -67,6 +67,8 @@ class PositionExecutor(ExecutorBase):
         self._total_executed_amount_backup: Decimal = Decimal("0")
         self._current_retries = 0
         self._max_retries = max_retries
+        self.last_entry_price: Optional[Decimal] = None
+        self.last_exit_price: Optional[Decimal] = None
 
     @property
     def is_perpetual(self) -> bool:
@@ -287,8 +289,16 @@ class PositionExecutor(ExecutorBase):
         """
         if self.config.side == TradeType.BUY:
             take_profit_price = self.entry_price * (1 + self.config.triple_barrier_config.take_profit)
+            # if self.config.triple_barrier_config.take_profit_order_type == OrderType.LIMIT_MAKER:
+            #     take_profit_price = max(take_profit_price,
+            #                             self.get_price(self.config.connector_name, self.config.trading_pair,
+            #                                            PriceType.BestAsk))
         else:
             take_profit_price = self.entry_price * (1 - self.config.triple_barrier_config.take_profit)
+            # if self.config.triple_barrier_config.take_profit_order_type == OrderType.LIMIT_MAKER:
+            #     take_profit_price = min(take_profit_price,
+            #                             self.get_price(self.config.connector_name, self.config.trading_pair,
+            #                                            PriceType.BestBid))
         if self.config.triple_barrier_config.take_profit_order_type == OrderType.LIMIT_MAKER:
             take_profit_price = self.get_price_for_limit_maker(self.close_order_side, take_profit_price)
         return take_profit_price
@@ -362,11 +372,13 @@ class PositionExecutor(ExecutorBase):
                         self.logger().info(f"Price ({self.get_price_for_limit_maker(side)}) moved away from the closing order price ({self._close_order.order.price}), cancelling the order")
                         self.renew_close_order()
                 else:
-                    self.logger().info("Waiting for close order to be filled")
+                    self.logger().info(f"Waiting for close order {self._close_order.order_id} to be filled")
             else:
+                self.logger().info(f"Close order {self._close_order.order_id} not found in in-flight orders")
                 self._failed_orders.append(self._close_order)
                 self._close_order = None
         else:
+            self.logger().info("Placing close order")
             self.place_close_order_and_cancel_open_orders(close_type=self.close_type)
 
     def evaluate_max_retries(self):
@@ -452,6 +464,7 @@ class PositionExecutor(ExecutorBase):
             side=self.config.side,
             position_action=PositionAction.OPEN,
         )
+        self.last_entry_price = self.entry_price  # Store the entry price for future reference, it is not available in the order object
         self._open_order = TrackedOrder(order_id=order_id)
         self.logger().debug(f"Executor ID: {self.config.id} - Placing open order {order_id}")
 
@@ -492,8 +505,9 @@ class PositionExecutor(ExecutorBase):
                 side=self.close_order_side,
                 position_action=PositionAction.CLOSE,
             )
+            self.last_exit_price = close_price  # Store the exit price for future reference, it is not available in the order object
             self._close_order = TrackedOrder(order_id=order_id)
-            self.logger().debug(f"Executor ID: {self.config.id} - Placing close order {order_id} --> Filled amount: {self.open_filled_amount}")
+            self.logger().info(f"Executor ID: {self.config.id} - Placing close order {order_id} --> Filled amount: {self.open_filled_amount}")
         self.close_type = close_type
         self.close_timestamp = self._strategy.current_timestamp
         self._status = RunnableStatus.SHUTTING_DOWN
@@ -657,6 +671,7 @@ class PositionExecutor(ExecutorBase):
         :return: None
         """
         in_flight_order = self.get_in_flight_order(self.config.connector_name, order_id)
+        self.logger().info(f"Updating order {order_id} with in_flight_order: {in_flight_order.__dict__}")
         if self._open_order and self._open_order.order_id == order_id:
             self._open_order.order = in_flight_order
         elif self._close_order and self._close_order.order_id == order_id:
@@ -677,6 +692,7 @@ class PositionExecutor(ExecutorBase):
         _total_executed_amount_backup, that can be used if the InFlightOrder
         is not available.
         """
+        self.logger().info(f"Order {event.order_id} filled, processing it")
         self.update_tracked_orders_with_order_id(event.order_id)
 
     def process_order_completed_event(self, _, market, event: Union[BuyOrderCompletedEvent, SellOrderCompletedEvent]):
@@ -697,6 +713,7 @@ class PositionExecutor(ExecutorBase):
         This method is responsible for processing the order canceled event
         """
         if self._close_order and event.order_id == self._close_order.order_id:
+            self.logger().info(f"Close order {event.order_id} was cancelled")
             self._failed_orders.append(self._close_order)
             self._close_order = None
         if self._open_order and event.order_id == self._open_order.order_id:
@@ -717,6 +734,7 @@ class PositionExecutor(ExecutorBase):
             self.logger().error(f"Open order failed {event.order_id}. Retrying {self._current_retries}/{self._max_retries}")
             self._current_retries += 1
         elif self._close_order and event.order_id == self._close_order.order_id:
+            self.logger().info(f"Close order failed {event.order_id}")
             self._failed_orders.append(self._close_order)
             self._close_order = None
             self.logger().error(f"Close order failed {event.order_id}. Retrying {self._current_retries}/{self._max_retries}")
