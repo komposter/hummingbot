@@ -34,7 +34,7 @@ class PositionExecutor(ExecutorBase):
         return cls._logger
 
     def __init__(self, strategy: ScriptStrategyBase, config: PositionExecutorConfig,
-                 update_interval: float = 1.0, max_retries: int = 10):
+                 update_interval: float = 0.01, max_retries: int = 999):
         """
         Initialize the PositionExecutor instance.
 
@@ -370,7 +370,7 @@ class PositionExecutor(ExecutorBase):
                     if (side == TradeType.BUY and self.get_price_for_limit_maker(side) > self._close_order.order.price) or \
                             (side == TradeType.SELL and self.get_price_for_limit_maker(side) < self._close_order.order.price):
                         self.logger().info(f"Price ({self.get_price_for_limit_maker(side)}) moved away from the closing order price ({self._close_order.order.price}), cancelling the order")
-                        self.renew_close_order()
+                        self.cancel_close_order()  # it will be placed again in the next iteration
                 else:
                     self.logger().info(f"Waiting for close order {self._close_order.order_id} to be filled")
             else:
@@ -624,16 +624,6 @@ class PositionExecutor(ExecutorBase):
         )
         self.logger().debug("Removing open order")
 
-    def renew_close_order(self):
-        """
-        This method is responsible for renewing the close order.
-
-        :return: None
-        """
-        self.cancel_close_order()
-        self.place_close_order_and_cancel_open_orders(close_type=self.close_type, price=self.close_price)
-        self.logger().debug("Renewing close order")
-
     def cancel_close_order(self):
         """
         This method is responsible for canceling the close order.
@@ -676,6 +666,7 @@ class PositionExecutor(ExecutorBase):
             self._open_order.order = in_flight_order
         elif self._close_order and self._close_order.order_id == order_id:
             self._close_order.order = in_flight_order
+            self.logger().info(f"Close order {order_id} updated!")
         elif self._take_profit_limit_order and self._take_profit_limit_order.order_id == order_id:
             self._take_profit_limit_order.order = in_flight_order
 
