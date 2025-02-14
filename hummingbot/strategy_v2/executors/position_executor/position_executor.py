@@ -34,7 +34,7 @@ class PositionExecutor(ExecutorBase):
         return cls._logger
 
     def __init__(self, strategy: ScriptStrategyBase, config: PositionExecutorConfig,
-                 update_interval: float = 0.01, max_retries: int = 999):
+                 update_interval: float = 0.01, max_retries: int = 99):
         """
         Initialize the PositionExecutor instance.
 
