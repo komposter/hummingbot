@@ -495,6 +495,7 @@ class PositionExecutor(ExecutorBase):
         self.cancel_open_orders()
         if self.amount_to_close >= self.trading_rules.min_order_size:
             # if self.config.triple_barrier_config.xxxxxxxx == OrderType.LIMIT_MAKER:
+            self.logger().info(f"Placing close order with amount {self.amount_to_close}")
             close_price = self.get_price_for_limit_maker(self.close_order_side, price)
             order_id = self.place_order(
                 connector_name=self.config.connector_name,
@@ -507,7 +508,7 @@ class PositionExecutor(ExecutorBase):
             )
             self.last_exit_price = close_price  # Store the exit price for future reference, it is not available in the order object
             self._close_order = TrackedOrder(order_id=order_id)
-            self.logger().info(f"Executor ID: {self.config.id} - Placing close order {order_id} --> Filled amount: {self.open_filled_amount}")
+            self.logger().info(f"Close order {order_id} has been placed")
         self.close_type = close_type
         self.close_timestamp = self._strategy.current_timestamp
         self._status = RunnableStatus.SHUTTING_DOWN
