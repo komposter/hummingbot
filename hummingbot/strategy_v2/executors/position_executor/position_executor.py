@@ -69,6 +69,7 @@ class PositionExecutor(ExecutorBase):
         self._max_retries = max_retries
         self.last_entry_price: Optional[Decimal] = None
         self.last_exit_price: Optional[Decimal] = None
+        self.min_move_to_trail = Decimal("1.0")  # Minimum price move to trail the limit order (should be in config!)
 
     @property
     def is_perpetual(self) -> bool:
@@ -364,12 +365,15 @@ class PositionExecutor(ExecutorBase):
                 await connector._update_orders_with_error_handler(
                     orders=[in_flight_order],
                     error_handler=connector._handle_update_error_for_lost_order)
-                # if closing order exists, but not filled, and price moved away from the order, cancel the order (it will be placed again) (only for limit orders)
-                if self._close_order.is_open and not self._close_order.is_filled and self._close_order.order.order_type.is_limit_type():
-                    side = self.close_order_side
-                    if (side == TradeType.BUY and self.get_price_for_limit_maker(side) > self._close_order.order.price) or \
-                            (side == TradeType.SELL and self.get_price_for_limit_maker(side) < self._close_order.order.price):
-                        self.logger().info(f"Price ({self.get_price_for_limit_maker(side)}) moved away from the closing order price ({self._close_order.order.price}), cancelling the order")
+                # (only for limit orders) if closing order exists, but not filled, and remaining amount is greater than min order size (so we can place the order)
+                if (self._close_order.is_open and not self._close_order.is_filled and
+                        self._close_order.order.order_type.is_limit_type() and
+                        self.amount_to_close >= self.trading_rules.min_order_size):
+                    # if price moved away from the order, cancel the order (it will be placed again)
+                    new_price = self.get_price_for_limit_maker(self.close_order_side)
+                    if (self.close_order_side == TradeType.BUY and new_price - self._close_order.order.price >= self.min_move_to_trail) or \
+                            (self.close_order_side == TradeType.SELL and self._close_order.order.price - new_price >= self.min_move_to_trail):
+                        self.logger().info(f"Price ({new_price}) moved away from the closing order price ({self._close_order.order.price}), cancelling the order")
                         self.cancel_close_order()  # it will be placed again in the next iteration
                 else:
                     self.logger().info(f"Waiting for close order {self._close_order.order_id} to be filled")
@@ -416,10 +420,18 @@ class PositionExecutor(ExecutorBase):
                                                  self.config.triple_barrier_config.open_order_type):
                 self.place_open_order()
         else:
-            if self._open_order.order and not self._open_order.is_filled and \
-                    not self._is_within_activation_bounds(self.config.entry_price, self.config.side,
-                                                          self.config.triple_barrier_config.open_order_type):
-                self.cancel_open_order()
+            if self._open_order.order and not self._open_order.is_filled:
+                if not self._is_within_activation_bounds(self.config.entry_price, self.config.side,
+                                                         self.config.triple_barrier_config.open_order_type):
+                    self.cancel_open_order()
+                elif self.config.triple_barrier_config.open_order_type == OrderType.LIMIT_MAKER:
+                    # if price moved away from the order, cancel the order (it will be placed again)
+                    new_price = self.entry_price
+                    if ((self.config.side == TradeType.BUY and new_price - self._open_order.order.price >= self.min_move_to_trail) or
+                            (self.config.side == TradeType.SELL and self._open_order.order.price - new_price >= self.min_move_to_trail)):
+                        self.logger().info(
+                            f"Price ({new_price}) moved away from the opening order price ({self._open_order.order.price}), cancelling the order")
+                        self.cancel_open_order()  # it will be placed again in the next iteration
 
     def _is_within_activation_bounds(self, order_price: Decimal, side: TradeType, order_type: OrderType) -> bool:
         """
@@ -455,16 +467,17 @@ class PositionExecutor(ExecutorBase):
 
         :return: None
         """
+        entry_price = self.entry_price
         order_id = self.place_order(
             connector_name=self.config.connector_name,
             trading_pair=self.config.trading_pair,
             order_type=self.config.triple_barrier_config.open_order_type,
             amount=self.config.amount,
-            price=self.entry_price,
+            price=entry_price,
             side=self.config.side,
             position_action=PositionAction.OPEN,
         )
-        self.last_entry_price = self.entry_price  # Store the entry price for future reference, it is not available in the order object
+        self.last_entry_price = entry_price  # Store the entry price for future reference, it is not available in the order object
         self._open_order = TrackedOrder(order_id=order_id)
         self.logger().debug(f"Executor ID: {self.config.id} - Placing open order {order_id}")
 
