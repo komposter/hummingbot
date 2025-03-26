@@ -426,7 +426,7 @@ class PositionExecutor(ExecutorBase):
                     self.cancel_open_order()
                 elif self.config.triple_barrier_config.open_order_type == OrderType.LIMIT_MAKER:
                     # if price moved away from the order, cancel the order (it will be placed again)
-                    new_price = self.entry_price
+                    new_price = self.get_price_for_limit_maker(self.config.side)
                     if ((self.config.side == TradeType.BUY and new_price - self._open_order.order.price >= self.min_move_to_trail) or
                             (self.config.side == TradeType.SELL and self._open_order.order.price - new_price >= self.min_move_to_trail)):
                         self.logger().info(
@@ -467,7 +467,7 @@ class PositionExecutor(ExecutorBase):
 
         :return: None
         """
-        entry_price = self.entry_price
+        entry_price = self.get_price_for_limit_maker(self.config.side)
         order_id = self.place_order(
             connector_name=self.config.connector_name,
             trading_pair=self.config.trading_pair,
