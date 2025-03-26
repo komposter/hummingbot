@@ -71,6 +71,10 @@ class PositionExecutor(ExecutorBase):
         self.last_exit_price: Optional[Decimal] = None
         self.min_move_to_trail = Decimal("1.0")  # Minimum price move to trail the limit order (should be in config!)
 
+        # Cumulative values for partial filled orders
+        self._previous_close_filled_amount: Decimal = Decimal("0")
+        self._previous_close_cum_fees_quote: Decimal = Decimal("0")
+
     @property
     def is_perpetual(self) -> bool:
         """
@@ -132,7 +136,7 @@ class PositionExecutor(ExecutorBase):
 
         :return: The filled amount of the close order if it exists, otherwise 0.
         """
-        return self._close_order.executed_amount_base if self._close_order else Decimal("0")
+        return self._close_order.executed_amount_base if self._close_order else Decimal("0") + self._previous_close_filled_amount
 
     @property
     def close_filled_amount_quote(self) -> Decimal:
@@ -259,7 +263,7 @@ class PositionExecutor(ExecutorBase):
         :return: The cumulative fees in quote asset.
         """
         orders = [self._open_order, self._close_order]
-        return sum([order.cum_fees_quote for order in orders if order])
+        return sum([order.cum_fees_quote for order in orders if order]) + self._previous_close_cum_fees_quote
 
     def get_net_pnl_pct(self) -> Decimal:
         """
@@ -380,7 +384,7 @@ class PositionExecutor(ExecutorBase):
             else:
                 self.logger().info(f"Close order {self._close_order.order_id} not found in in-flight orders")
                 self._failed_orders.append(self._close_order)
-                self._close_order = None
+                self._clear_close_order()
         else:
             self.logger().info("Placing close order")
             self.place_close_order_and_cancel_open_orders(close_type=self.close_type)
@@ -651,6 +655,19 @@ class PositionExecutor(ExecutorBase):
         )
         self.logger().debug("Removing close order")
 
+    def _clear_close_order(self):
+        """
+        Save the close order information (if it exists) and clear the close order.
+        """
+        if self._close_order:
+            if self._close_order.executed_amount_base > Decimal("0"):
+                self._previous_close_filled_amount += self._close_order.executed_amount_base
+                self.logger().info(f"Adding {self._close_order.executed_amount_base} to previous close filled amount, total: {self._previous_close_filled_amount}")
+            if self._close_order.cum_fees_quote > Decimal("0"):
+                self.logger().info(f"Adding {self._close_order.cum_fees_quote} to previous close cum fees, total: {self._previous_close_cum_fees_quote}")
+                self._previous_close_cum_fees_quote += self._close_order.cum_fees_quote
+        self._close_order = None
+
     def early_stop(self, keep_position: bool = False):
         """
         This method allows strategy to stop the executor early.
@@ -720,7 +737,7 @@ class PositionExecutor(ExecutorBase):
         if self._close_order and event.order_id == self._close_order.order_id:
             self.logger().info(f"Close order {event.order_id} was cancelled")
             self._failed_orders.append(self._close_order)
-            self._close_order = None
+            self._clear_close_order()
         if self._open_order and event.order_id == self._open_order.order_id:
             self._failed_orders.append(self._open_order)
             self._open_order = None
@@ -741,7 +758,7 @@ class PositionExecutor(ExecutorBase):
         elif self._close_order and event.order_id == self._close_order.order_id:
             self.logger().info(f"Close order failed {event.order_id}")
             self._failed_orders.append(self._close_order)
-            self._close_order = None
+            self._clear_close_order()
             self.logger().error(f"Close order failed {event.order_id}. Retrying {self._current_retries}/{self._max_retries}")
             self._current_retries += 1
         elif self._take_profit_limit_order and event.order_id == self._take_profit_limit_order.order_id:
