@@ -26,7 +26,7 @@ from hummingbot.strategy_v2.models.executors import CloseType, TrackedOrder
 
 class PositionExecutor(ExecutorBase):
     _logger = None
-    _version = "2025.03.31"
+    _version = "2025.04.06"
 
     @classmethod
     def logger(cls) -> HummingbotLogger:
@@ -40,7 +40,7 @@ class PositionExecutor(ExecutorBase):
         Initialize the PositionExecutor instance.
 
         :param strategy: The strategy to be used by the PositionExecutor.
-        :param config: The configuration for the PositionExecutor, subclass of PositionExecutoConfig.
+        :param config: The configuration for the PositionExecutor, subclass of PositionExecutorConfig.
         :param update_interval: The interval at which the PositionExecutor should be updated, defaults to 1.0.
         :param max_retries: The maximum number of retries for the PositionExecutor, defaults to 5.
         """
@@ -761,18 +761,18 @@ class PositionExecutor(ExecutorBase):
         if self._open_order and event.order_id == self._open_order.order_id:
             self._failed_orders.append(self._open_order)
             self._open_order = None
-            self.logger().error(f"Open order failed {event.order_id}. Retrying {self._current_retries}/{self._max_retries}")
+            self.logger().warning(f"Open order failed {event.order_id}. Retrying {self._current_retries}/{self._max_retries}")
             self._current_retries += 1
         elif self._close_order and event.order_id == self._close_order.order_id:
             self.logger().info(f"Close order failed {event.order_id}")
             self._failed_orders.append(self._close_order)
             self._clear_close_order()
-            self.logger().error(f"Close order failed {event.order_id}. Retrying {self._current_retries}/{self._max_retries}")
+            self.logger().warning(f"Close order failed {event.order_id}. Retrying {self._current_retries}/{self._max_retries}")
             self._current_retries += 1
         elif self._take_profit_limit_order and event.order_id == self._take_profit_limit_order.order_id:
             self._failed_orders.append(self._take_profit_limit_order)
             self._take_profit_limit_order = None
-            self.logger().error(f"Take profit order failed {event.order_id}. Retrying {self._current_retries}/{self._max_retries}")
+            self.logger().warning(f"Take profit order failed {event.order_id}. Retrying {self._current_retries}/{self._max_retries}")
 
     def get_custom_info(self) -> Dict:
         return {
