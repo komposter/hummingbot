@@ -26,7 +26,7 @@ from hummingbot.strategy_v2.models.executors import CloseType, TrackedOrder
 
 class PositionExecutor(ExecutorBase):
     _logger = None
-    _version = "2025.04.06"
+    _version = "2025.04.15"
 
     @classmethod
     def logger(cls) -> HummingbotLogger:
@@ -700,7 +700,7 @@ class PositionExecutor(ExecutorBase):
         :return: None
         """
         in_flight_order = self.get_in_flight_order(self.config.connector_name, order_id)
-        self.logger().info(f"Updating order {order_id} with in_flight_order: {in_flight_order.__dict__}")
+        self.logger().info(f"Updating order {order_id} with in_flight_order: {in_flight_order.__dict__ if in_flight_order else None}")
         if self._open_order and self._open_order.order_id == order_id:
             self._open_order.order = in_flight_order
         elif self._close_order and self._close_order.order_id == order_id:
